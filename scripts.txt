@@ -1,0 +1,2 @@
+Pillow>=10
+pyperclip>=1.8
