@@ -1,119 +1,52 @@
+#__version__="2025.10.04"
 from PIL import Image, ImageTk, ImageEnhance, ImageOps
 from datetime import datetime, timedelta
 import tkinter as tk
+tk.NoDefaultRoot()   
+root = tk.Tk()
 from tkinter import messagebox
 import os
+import re
 import platform
 import sys
-if getattr(sys, 'frozen', False):
-    BASE_DIR = sys._MEIPASS
-else:
-    BASE_DIR = os.path.dirname(__file__)
-import pyperclip
-# ===== 금지목록: 네트워크 공유 폴더에서 불러오기/저장하기 =====
-BAN_DIR = r"\\10.2.0.113\홍보마케팅\_개인폴더_\이준영\터치X"
-BAN_FILE_NOCADDY = os.path.join(BAN_DIR, "노캐디 금지목록.txt")
-BAN_FILE_FIVE    = os.path.join(BAN_DIR, "5인플레이 금지목록.txt")
+VENDOR_DIR = os.path.join(os.path.dirname(__file__), "vendor")  # ← dirname
+if VENDOR_DIR not in sys.path:
+    sys.path.insert(0, VENDOR_DIR)
 
-# 처음 가동 시 파일이 비어 있거나 없을 경우 사용할 기본값
-_DEFAULT_NOCADDY = [
-    "홍명열","최연홍","김청엽","이관승","고민서","이명신"
-]
-_DEFAULT_FIVE = [
-    "박선철","최경진","조국정","심남열","서영주","성구현","이남진","윤순정",
-    "김정식","권동진","김동현","신인호","석봉환","박진석","김지성","최기수",
-    "박우세","서문억","나영수","김진수","최성관","차준관","오기택","김환태",
-    "주훈종","조경희","강용운","김정수","박근용","박정진","이제휴","이득희"
-]
+# 달력 다이얼로그 (폴백 포함)
+try:
+    from ttkbootstrap.dialogs import DateRangePickerDialog
+    _HAVE_RANGE_PICKER = True
+except ImportError:            # 전체 Exception 말고 이게 더 정확
+    _HAVE_RANGE_PICKER = False  # ← 변수명 통일 (언더스코어 포함)
+import pyperclip
+# === JYP 모듈 임포트 =====================================
+from jyp.config import BASE_DIR, HUM_PATH, 기본테마, 씹덕테마, PLACEHOLDER
+from jyp.templates import TEMPLATES, 요일표, reload_from_cloud as _tpl_reload
+from jyp.banlist import (
+    노캐디금지목록, 오인플금지목록,
+    reload_from_disk as _ban_reload_from_disk,
+    persist as _ban_persist,
+)
+from jyp.cloud import fetch_ban as _ban_fetch
+from jyp.specials import SpecialsWindow
+from jyp.utils import (
+    mmdd_to_dt as _mmdd_to_dt,
+    is_valid_mmdd as _is_valid_mmdd,
+    is_valid_time_hhmm as _is_valid_time_hhmm,
+    hex_to_rgb as _hex_to_rgb,
+)
+from jyp.reservation import ReservationData, validate, render_text
+from jyp.ui.styles import setup_styles, apply_temp_calendar_theme, restore_app_palette, PALETTE, DEFAULT_THEME
+from jyp.ui.styles import apply_theme_colors
+setup_styles(root, 기본테마)
+# 전역 기본값 (NameError 방지)
+img_label = None
+overlay_labels = []
+hidden_button = None
+# ========================================================
 # 메모리 내 목록(집합으로 관리: 중복 자동 정리)
-노캐디금지목록  = set(_DEFAULT_NOCADDY)
-오인플금지목록  = set(_DEFAULT_FIVE)
-def _ban__read_lines(path: str) -> list[str]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return [ln.strip() for ln in f if ln.strip()]
-    except Exception:
-        return []
-def _ban__write_lines(path: str, names: set[str]):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for name in sorted(names):
-            f.write(name + "\n")
-def _ban_reload_from_disk():
-    """공유폴더에서 목록을 다시 불러와 메모리에 반영."""
-    global 노캐디금지목록, 오인플금지목록
-    n = _ban__read_lines(BAN_FILE_NOCADDY)
-    f = _ban__read_lines(BAN_FILE_FIVE)
-    if n: 노캐디금지목록 = set(n)
-    if f: 오인플금지목록 = set(f)
-def _ban_persist(kind: str):
-    """kind='nocaddy' | 'five' 에 해당하는 파일로 저장."""
-    if kind == "nocaddy":
-        _ban__write_lines(BAN_FILE_NOCADDY, 노캐디금지목록)
-    else:
-        _ban__write_lines(BAN_FILE_FIVE, 오인플금지목록)
-# 시작할 때 한 번 시도
-_ban_reload_from_disk()
-TEMPLATES = {
-    "카카오 발송문자": {
-        "fields":[
-            ("예약자", "name"),
-            ("테스트1", "test1"),
-            ("테스트2", "test2"),
-        ],
-        "format":
-            "[장수골프리조트 사전예약안내]\n"
-            "예약자: {name}님\n"
-            "예약날: {test1}\n"
-            "예약시간: {test2}\n"
-            "감사합니다."
-    },
-    "예약확정문자": {
-        "fields":[
-            ("예약자", "name"),
-            ("예약일자", "날짜", "date"),
-            ("코스", "코스"),
-            ("시간", "시간", "time"),
-        ],
-        "format":
-            "[장수골프리조트]\n"
-            "예약이 완료 되었습니다.\n"
-            "라운드 전 내용 확인해 주시기 바랍니다.\n"
-            "\n"
-            "▷ 예약정보\n"
-            "· 예약자명 : {name}님\n"
-            "· 예약일자 : {날짜}\n"
-            "· 비고 : {코스} / {시간} / 18홀\n"
-            " - ▷ 셀프체크인\n"
-            "당 클럽은 빠르고, 편리한 키오스크로 운영중입니다. \n"
-            "원활한 셀프체크인을 위해 내장객 명단을 문자로 보내주세요. \n"
-            "(예약자명 + 내장객명단 / 남,여)\n"
-            "보내실 곳 010-7245-1760\n"
-            "\n"
-            "▷ 취소가능기한\n"
-            "· {날짜-3} 23:59\n"
-            "\n"
-            "▷ 주의사항\n"
-            "취소가능기한 이후 취소시 위약금이 발생 할 수 있으며, 골프예약 서비스 이용에 제약을 받을 수 있습니다."
-    },
-}
-# 요일표
-요일표 = {"Mon": "월","Tue": "화","Wed": "수","Thu": "목","Fri": "금","Sat": "토","Sun": "일"}
 is_2박3일 = False  # 출력 형식 상태
-# 색상 테마
-기본테마 = {
-    "배경": "#f8fff4",
-    "라벨글자": "#2e7d32",
-    "입력창배경": "white",
-    "출력창배경": "#f1f8e9"
-}
-씹덕테마 = {
-    "배경": "#fff0fb",
-    "라벨글자": "#e91e63",
-    "입력창배경": "#fff7fc",
-    "출력창배경": "#fff0f5"
-}
-root = tk.Tk()
 root.title("1박2일 예약문자 생성기")
 root.configure(bg=기본테마["배경"])
 # [NEW] 시작 크기(대략 1.3배)
@@ -122,13 +55,13 @@ root.geometry("1180x720")
 root.grid_columnconfigure(1, weight=1)   # Text가 있는 열
 root.grid_rowconfigure(0, weight=1)      # Text가 있는 행
 # [NEW] 확정 문구 포함 토글 (기본: 꺼짐)
-confirm_mode = tk.BooleanVar(value=False)
+confirm_mode = tk.BooleanVar(master=root, value=False)
 # [NEW] 룸 수(2/4) 선택 변수 (기본=2)
-rooms_var = tk.IntVar(value=2)
+rooms_var = tk.IntVar(master=root, value=2)
 # [NEW] 팀 수(1/2/3/4+) 상태 (4는 '4팀이상' → 시간칸 1개만)
-team_var = tk.IntVar(value=1)
+team_var = tk.IntVar(master=root, value=1)
 # [NEW] 1~3팀일 땐 고정값(프록시), 4팀이상일 땐 입력칸 사용
-team_fixed_var = tk.IntVar(value=1)  # 1/2/3 버튼용
+team_fixed_var = tk.IntVar(master=root, value=1)  # 1/2/3 버튼용
 TEAM_ENTRY = None  # 실제 '팀 수' Entry 위젯을 저장
 TEAM_LABEL = None  # '팀 수' Label (보이기/숨기기용)
 # [NEW] 시간칸 컨테이너: 프레임(F), 엔트리 리스트(T)
@@ -194,7 +127,6 @@ ban_frame = tk.Frame(root, bg=기본테마["배경"])
 ban_title = tk.Label(ban_frame, text="노캐디/5인플 금지 조회", bg=기본테마["배경"],
                      fg=기본테마["라벨글자"], font=("맑은 고딕", 14, "bold"))
 ban_title.pack(pady=(20, 8))
-PLACEHOLDER = "여기에 이름입력"   # ← 추가
 # ↓ 기존 ban_input 생성·insert 부분 교체
 ban_input = tk.Entry(ban_frame, width=28, bg=기본테마["입력창배경"], fg="#999")
 ban_input.pack(pady=4)
@@ -244,7 +176,7 @@ ban_edit.pack(pady=(8, 12), padx=10, fill="x")
 tk.Label(ban_edit, text="이름", bg=기본테마["배경"]).grid(row=0, column=0, padx=(8,4), pady=6, sticky="e")
 ban_edit_name = tk.Entry(ban_edit, width=18, bg=기본테마["입력창배경"])
 ban_edit_name.grid(row=0, column=1, padx=(0,8), pady=6, sticky="w")
-ban_kind = tk.StringVar(value="nocaddy")
+ban_kind = tk.StringVar(master=root, value="nocaddy")
 tk.Radiobutton(ban_edit, text="노캐디",    variable=ban_kind, value="nocaddy", bg=기본테마["배경"])\
   .grid(row=0, column=2, padx=6, sticky="w")
 tk.Radiobutton(ban_edit, text="5인플레이", variable=ban_kind, value="five",     bg=기본테마["배경"])\
@@ -287,6 +219,9 @@ btn_ban = tk.Button(home_frame, text="🚫 금지목록", height=1, width=20, co
 btn_ban.pack(pady=4)
 btn_prog3 = tk.Button(home_frame, text="🧪 준비중", height=1, width=20, command=lambda: show_prep())
 btn_prog3.pack(pady=4)
+btn_specials = tk.Button(home_frame, text="📂 특가모음", height=1, width=20,
+                         command=lambda: SpecialsWindow(master=root))
+btn_specials.pack(pady=4)
 # ===== [NEW] 준비중(템플릿 문자) 화면 =====
 prep_frame = tk.Frame(root, bg=기본테마["배경"])
 # 3분할: 빨강(왼) / 초록(가운데) / 파랑(오른쪽)
@@ -323,7 +258,7 @@ prep_right.grid(row=0, column=2, sticky="nsew", padx=(10,16), pady=16)
 prep_text = tk.Text(prep_right, wrap="word", bg=기본테마["출력창배경"], state="disabled")
 prep_text.pack(fill="both", expand=True)
 # 상태 보관
-_prep_selected = tk.StringVar(value="")
+_prep_selected = tk.StringVar(master=root, value="")
 _prep_fields = {}  # {키: Entry}
 # 종료 버튼(선택)
 tk.Button(home_frame, text="닫기", command=root.destroy).pack(pady=(20,10))
@@ -429,29 +364,6 @@ for k in ("day3.time",):
         L[k].grid_remove()
     if k in F:
         F[k].grid_remove()  # Frame 자체를 숨김
-# ===== 유틸: MM/DD를 연도 자동 보정해서 datetime으로 =====
-def _mmdd_to_dt(mmdd: str, base_year: int) -> datetime:
-    """'MM/DD'를 base_year로 파싱. 달/일 유효성 체크 포함."""
-    try:
-        return datetime.strptime(f"{base_year}/" + mmdd, "%Y/%m/%d")
-    except ValueError:
-        raise
-def _is_valid_mmdd(s: str) -> bool:
-    if len(s) != 5 or s[2] != '/':
-        return False
-    mm, dd = s[:2], s[3:]
-    if not (mm.isdigit() and dd.isdigit()):
-        return False
-    m, d = int(mm), int(dd)
-    return 1 <= m <= 12 and 1 <= d <= 31  # 세부 일수는 datetime 파싱에서 최종 검증
-def _is_valid_time_hhmm(s: str) -> bool:
-    if len(s) != 5 or s[2] != ':':
-        return False
-    hh, mm = s[:2], s[3:]
-    if not (hh.isdigit() and mm.isdigit()):
-        return False
-    h, m = int(hh), int(mm)
-    return 0 <= h <= 23 and 0 <= m <= 59
 def resolve_dates_with_years(first_mmdd: str, second_mmdd: str, third_mmdd: str | None = None):
     """현재 연도를 기준으로 연말→연초 넘어감 자동 보정.
     d1: 올해, d2: d1보다 앞달/앞일이면 내년으로, d3도 d2 기준 동일 규칙.
@@ -486,11 +398,6 @@ def _ensure_time_count(day: str, count: int):
         w = lst.pop()
         try: w.destroy()
         except: pass
-# [NEW] HEX -> RGB
-def _hex_to_rgb(hexcode: str):
-    hexcode = hexcode.lstrip("#")
-    return tuple(int(hexcode[i:i+2], 16) for i in (0, 2, 4))
-# [REPLACE] Text 아래에 배경 라벨을 깔고 갱신하는 버전
 def _update_canvas_bg():
     try:
         root.update_idletasks()
@@ -508,7 +415,7 @@ def _update_canvas_bg():
         # ↓↓↓ 아래는 기존 배경 크롭+안개 코드 그대로 유지 ↓↓↓
         base = getattr(root, "_bg_base", None)
         if base is None:
-            base = Image.open(os.path.join(BASE_DIR, "hum.jpg")).convert("RGBA")
+            base = Image.open(HUM_PATH).convert("RGBA")
             base = base.resize((root.winfo_width(), root.winfo_height()))
             root._bg_base = base
         abs_x = text_canvas.winfo_rootx() - root.winfo_rootx()
@@ -593,185 +500,39 @@ def _open_editor():
     root.bind("<Configure>", lambda e: _sync_editor_geometry(), add="+")
 # [NEW] 초기 팀 상태 적용 (앱 시작 시 1팀으로 세팅: 입력칸 숨김)
 _set_team(team_var.get())
-# ===== 입력값 검증 =====
-def validate_inputs(is_2박3일_mode: bool):
-    errors = []
-    예약자   = W["name"].get().strip()
-    첫날     = W["day1.date"].get().strip()
-    첫날시간 = W["day1.time"].get().strip()
-    둘째날시간 = W["day2.time"].get().strip()
-    셋째날시간 = W["day3.time"].get().strip()
-      # [NEW] 팀 수에 따른 추가 시간칸 검증
+def _collect_inputs_from_gui() -> ReservationData:
     req = 1 if (team_var.get() == 4) else team_var.get()
-    # day1/day2는 항상
-    for s in [e.get().strip() for e in T["day1"][:req]]:
-        if not _is_valid_time_hhmm(s): errors.append("첫 번째 날: HH:MM 형식 확인")
-    for s in [e.get().strip() for e in T["day2"][:req]]:
-        if not _is_valid_time_hhmm(s): errors.append("두 번째 날: HH:MM 형식 확인")
-    # day3는 2박3일일 때만
-    if is_2박3일:
-        for s in [e.get().strip() for e in T["day3"][:req]]:
-            if not _is_valid_time_hhmm(s): errors.append("세 번째 날: HH:MM 형식 확인")
-    팀수     = W["teams"].get().strip()
-    룸수     = W["rooms"].get().strip()
-    가격     = W["price"].get().strip()
-    # 팀/룸 정수
-    if not 팀수.isdigit() or int(팀수) <= 0:
-        errors.append("팀 수: 1 이상의 정수를 입력하세요.")
-    if not 룸수.isdigit() or int(룸수) not in (2, 4):
-        errors.append("룸 수: 2 또는 4만 선택하세요.")
-    # 날짜 형식 MM/DD
-    if not _is_valid_mmdd(첫날):
-        errors.append("첫 번째 날: MM/DD 형식으로 입력하세요 (예: 08/15).")
-    # 시간 형식 HH:MM (00-23 / 00-59)
-    if not _is_valid_time_hhmm(첫날시간):
-        errors.append("첫 번째 날 시간: HH:MM 24시간 형식으로 입력하세요 (예: 07:30).")
-    if not _is_valid_time_hhmm(둘째날시간):
-        errors.append("두 번째 날 시간: HH:MM 24시간 형식으로 입력하세요 (예: 07:30).")
-    if is_2박3일_mode and not _is_valid_time_hhmm(셋째날시간):
-        errors.append("세 번째 날 시간: HH:MM 24시간 형식으로 입력하세요 (예: 07:30).")
-    # 날짜 유효성(2월 30일 등) 및 연도 보정까지 시도
-    if not errors:
-        try:
-            _mmdd_to_dt(첫날, datetime.now().year)
-        except ValueError as ve:
-            errors.append(f"날짜가 올바르지 않습니다: {ve}")
-    return errors
-# 예약문구 출력 함수 (기존 문구/형식 유지)
+
+    def _times(day):
+        return [e.get().strip() for e in T[day][:req]]
+
+    return ReservationData(
+        name=W["name"].get().strip(),
+        day1=W["day1.date"].get().strip(),
+        day1_times=_times("day1"),
+        day2_times=_times("day2"),
+        day3_times=_times("day3") if is_2박3일 else [],
+        teams=int(W["teams"].get().strip() or "0"),
+        rooms=int((W["rooms"].get() or "0").strip()),
+        price=W["price"].get().strip()
+    )
+
+# ===== 입력값 검증 =====
 def 예약확인():
     global _last_output
     try:
-        # 2. 입력값 검증 (무엇이 문제인지 경고창)
-        errs = validate_inputs(is_2박3일)
+        data = _collect_inputs_from_gui()
+        errs = validate(data, is_2박3일)
         if errs:
             messagebox.showerror("입력 오류", "\n".join(f"- {e}" for e in errs))
             return
-        예약자   = W["name"].get()
-        첫날     = W["day1.date"].get()
-        첫날시간 = W["day1.time"].get()
-        둘째날시간 = W["day2.time"].get()
-        셋째날시간 = W["day3.time"].get()
-        팀수     = int(W["teams"].get())  
-              # [NEW] 팀 수에 맞춰 시간 문자열 합치기
-        req = 1 if (team_var.get() == 4) else team_var.get()
-        def _join(day):
-            return ", ".join(e.get().strip() for e in T[day][:req])
-        첫날시간들  = _join("day1")
-        둘째날시간들 = _join("day2")
-        셋째날시간들 = _join("day3") if is_2박3일 else ""
-        header_tag = "예약확정 안내"
-        팀라인 = f"{팀수}팀({팀수*4}명)예약 확정 되었습니다."
-        # 확정 전용 문구는 더 이상 쓰지 않음
-        룸수     = int(W["rooms"].get())
-        가격     = W["price"].get()
-        # 1. 연도 자동 처리 (연말→연초 보정)
-        # 첫날 datetime
-        d1 = _mmdd_to_dt(첫날, datetime.now().year)
-        # 자동 계산
-        d2 = d1 + timedelta(days=1)
-        d3 = d1 + timedelta(days=2) if is_2박3일 else None
-        # 출력용 MM/DD 문자열
-        둘째날 = d2.strftime("%m/%d")
-        셋째날 = d3.strftime("%m/%d") if is_2박3일 else ""
-        # 요일
-        요일1 = 요일표[d1.strftime("%a")]
-        요일2 = 요일표[d2.strftime("%a")]
-        if is_2박3일:
-            요일3 = 요일표[d3.strftime("%a")]
-            출력 = f"""[장수CC 2박3일 {header_tag}]
-예약자: {예약자}님
-■{첫날}({요일1}) {첫날시간들}
-■{둘째날}({요일2}) {둘째날시간들}
-■{셋째날}({요일3}) {셋째날시간들}
-{팀라인}
 
-[유의사항]
-*본 예약은 확정되었으며,
-*취소는 전화로만 가능하고,
-자동취소는 되지 않습니다.
-*2주전 취소부터는 위약발생
-*티오프 최소 30분전 내장!!
+        출력 = render_text(data, is_2박3일)
 
-[이용 요금]
-*패키지(1인): {가격}원
-(그린피3일(54홀)+숙박2일+조식2회포함)
-※불포함:카트피,캐디피
-※팀당 4인플레이 기준
-
-[숙박안내]
-*일자: {첫날}({요일1}), {둘째날}({요일2})
-숙소: 장수스테이  {팀수}객실
-{룸수}룸타입(방{룸수},욕실2,거실1)
-★ 객실내 취사 및 흡연 불가
-
-[조식안내]
-*2일차 라운드전 클럽하우스
-※라운드 시작이후 이용불가
-※티오프 50분전부터 식사가능
-※ 제공 시간은 9시까지  ※
-
-[예약금]
-*금 액: {팀수*30}만원 (팀당30만원)
-*은 행:기업은행
-*계 좌:232-112996-01-015
-*예금주:장수레저(주)
-※입금후 확인연락바랍니다.
-
-상기예약은 확정되었습니다.
-감사합니다.
-
--장수골프리조트"""
-        else:
-            출력 = f"""[장수CC 1박2일 {header_tag}]
-예약자: {예약자}님
-■{첫날}({요일1}) {첫날시간들}
-■{둘째날}({요일2}) {둘째날시간들}
-{팀라인}
-
-[유의사항]
-*본 예약은 확정되었으며,
-*취소는 전화로만 가능하며,
-자동취소는 되지 않습니다.
-*2주전 취소부터는 위약발생
-*티오프 최소 30분전 내장!!
-
-[이용 요금]
-*패키지(1인): {가격}원
-(그린피2일(36홀)+숙박+조식포함)
-※불포함:카트피,캐디피
-※팀당 4인플레이 기준
-
-[숙박안내]
-*일자: {첫날}({요일1})
-숙소: 장수스테이  {팀수}객실
-{룸수}룸타입(방{룸수},욕실2,거실1)
-★ 객실내 취사 및 흡연 불가
-
-[조식안내]
-*2일차 라운드전 클럽하우스
-※라운드 시작이후 이용불가
-※티오프 50분전부터 식사가능
-※ 제공 시간은 9시까지  ※
-
-[예약금]
-*금 액: {팀수*30}만원 (팀당30만원)
-*은 행:기업은행
-*계 좌:232-112996-01-015
-*예금주:장수레저(주)
-※입금후 확인연락바랍니다.
-
-상기예약은 확정되었습니다.
-감사합니다.
-
--장수골프리조트"""
-
-        # 씹덕테마면 배경(크롭+안개)을 먼저 깔고, 그 위에 출력 텍스트를 쓴다
-        # 텍스트만 갱신 (배경은 별도 라벨이어서 그대로 유지됨)
-        # 캔버스 텍스트 갱신
         text_canvas.itemconfigure(_canvas_text, text=출력)
         text_canvas.configure(scrollregion=text_canvas.bbox("all"))
         _last_output = 출력
-        # 씹덕모드면 배경도 재크롭
+
         if root.cget("bg") == 씹덕테마["배경"]:
             _update_canvas_bg()
     except Exception as e:
@@ -824,39 +585,56 @@ button_처음.grid(row=len(label_texts)+6, column=0, columnspan=2, pady=2)
 
 def show_home():
     """처음 화면으로"""
+    # 화면 이동 시에는 기본 테마로 강제 복귀
+    _force_basic_theme()
     try:
-        # 패키지 화면 숨기기
+        # 다른 화면 숨기기
         input_frame.grid_remove()
         text_canvas.grid_remove()
         scrollbar.grid_remove()
         ban_frame.grid_remove()
-        prep_frame.grid_remove()   # [NEW] 준비중 화면 숨김
+        prep_frame.grid_remove()
     except Exception:
         pass
     # 홈 보이기
     home_frame.grid(row=0, column=0, columnspan=3, sticky="nsew")
+    # 숨김(토글) 버튼은 항상 최상단/좌하단 유지
+    _place_toggle_button()
+
 def show_pkg():
     """패키지 문자 화면으로"""
+    # 화면 진입 시 기본 테마로 강제 복귀 (요청 2)
+    _force_basic_theme()
     # 홈 숨기기
     home_frame.grid_remove()
     # 패키지 화면 보이기 (원래 배치 그대로)
     input_frame.grid(row=0, column=0, padx=10, pady=10, sticky="n")
     text_canvas.grid(row=0, column=1, rowspan=20, padx=(10,0), pady=10, sticky="nsew")
     scrollbar.grid(row=0, column=2, rowspan=20, sticky="ns", padx=(0,10), pady=10)
+    # 숨김(토글) 버튼 재배치/상위 고정
+    _place_toggle_button()
+    # (씹덕모드가 아니라면 아래 호출은 효과 없음)
+    _update_canvas_bg()
     # 씹덕모드일 땐 우측 배경 재크롭
     _update_canvas_bg()
 def show_ban():
     """금지목록 화면으로"""
+    # 화면 진입 시 기본 테마로 강제 복귀 (요청 2)
+    _force_basic_theme()
     try:
-        input_frame.grid_remove()
-        text_canvas.grid_remove()
-        scrollbar.grid_remove()
-        home_frame.grid_remove()
+        from jyp.banlist import 노캐디금지목록, 오인플금지목록
+        noc = set(_ban_fetch("nocaddy"))
+        five = set(_ban_fetch("five"))
+        if noc: 노캐디금지목록.clear(); 노캐디금지목록.update(noc)
+        if five: 오인플금지목록.clear(); 오인플금지목록.update(five)
     except Exception:
+        # 2) 실패 시 공유폴더로 폴백 (기존 코드 유지)
+        _ban_reload_from_disk()
         pass
     ban_frame.grid(row=0, column=0, columnspan=3, sticky="nsew")
+    # 숨김(토글) 버튼 재배치/상위 고정
+    _place_toggle_button()
     ban_input.focus_set()
-    _ban_reload_from_disk()  # ← 이 줄 추가: 화면 들어올 때 항상 최신 목록으로
     try:
          ban_result.config(text="가능: 07:30 이후, 12:30 이후 가능", fg="#2e7d32")
     except Exception:
@@ -912,26 +690,69 @@ class _SafeFormatDict(dict):
     }
     def __missing__(self, key):
         return ""
+_COND = re.compile(r"\{\{\?(\w+?)\:(.*?)(?:\|(.*?))?\}\}", re.DOTALL)
+
+def _apply_conditionals(text: str, ctx: dict) -> str:
+    def repl(m):
+        key, then, else_ = m.group(1), m.group(2), m.group(3) or ""
+        return then if str(ctx.get(key, "")).strip() else else_
+    return _COND.sub(repl, text)
+# 한글/공백/하이픈 등도 허용, 단 중괄호/조건식 기호는 제외
+_EXPR_MUL = re.compile(r"\{([^{}\:\|]+?)\s*\*\s*([0-9]+(?:\.[0-9]+)?)\}")
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+def _apply_math(text: str, ctx: dict) -> str:
+    def mul(m):
+        key = m.group(1).strip()          # 키 양끝 공백 제거
+        factor = float(m.group(2))
+        raw = ctx.get(key, "")
+        # 숫자만 추출(쉼표/한글 섞여도 OK: '2팀', '1,234' 같은 경우)
+        s = str(raw).replace(",", "")
+        mnum = _NUM_RE.search(s)
+        if not mnum:
+            return ""                     # 값 없으면 빈문자
+        v = float(mnum.group(0))
+        res = v * factor
+        # 정수면 소수점 제거
+        return str(int(res)) if res.is_integer() else str(res)
+    return _EXPR_MUL.sub(mul, text)
 def _prep_render():
-    """현재 폼 값으로 텍스트 출력"""
     if not _prep_selected.get():
         return
     spec = TEMPLATES[_prep_selected.get()]
     data = {k: _prep_fields[k].get().strip() for k in _prep_fields}
-    # ── 파생 날짜 키 자동 생성: {날짜-3}, {날짜+1} 같은 것 지원 ──
+    # ── 파생 날짜 키 자동 생성: {날짜±1,2,3,7} + {…(요일)}, {…_요일} 지원 ──
     from datetime import timedelta
     for k, v in list(data.items()):
-        if _is_valid_mmdd(v):  # 이미 있는 유틸 함수 사용
+        if _is_valid_mmdd(v):
             base = _mmdd_to_dt(v, datetime.now().year)
-            for off in (1, 2, 3, 7):  # 필요하면 숫자 더 추가
-                data[f"{k}-{off}"] = (base - timedelta(days=off)).strftime("%m/%d")
-                data[f"{k}+{off}"] = (base + timedelta(days=off)).strftime("%m/%d")
-    out = spec["format"].format_map(_SafeFormatDict(data))
-    # 텍스트 갱신
+            # 기본값의 요일 파생
+            wd0 = 요일표.get(base.strftime("%a"), base.strftime("%a"))
+            data[f"{k}(요일)"] = f"{v}({wd0})"     # 예: "12/12(목)"
+            data[f"{k}_요일"] = wd0               # 예: "목"
+            # ±오프셋 파생
+            for off in (1, 2, 3, 7):
+                d_minus = base - timedelta(days=off)
+                d_plus  = base + timedelta(days=off)
+                mmdd_m = d_minus.strftime("%m/%d")
+                mmdd_p = d_plus.strftime("%m/%d")
+                wd_m   = 요일표.get(d_minus.strftime("%a"), d_minus.strftime("%a"))
+                wd_p   = 요일표.get(d_plus.strftime("%a"),  d_plus.strftime("%a"))
+                data[f"{k}-{off}"] = mmdd_m
+                data[f"{k}-{off}(요일)"] = f"{mmdd_m}({wd_m})"
+                data[f"{k}-{off}_요일"] = wd_m
+                data[f"{k}+{off}"] = mmdd_p
+                data[f"{k}+{off}(요일)"] = f"{mmdd_p}({wd_p})"
+                data[f"{k}+{off}_요일"] = wd_p
+    # 조건식 → 포맷
+    fmt = _apply_conditionals(spec["format"], data)
+    fmt = _apply_math(fmt, data)
+    out = fmt.format_map(_SafeFormatDict(data))
+
     prep_text.config(state="normal")
     prep_text.delete("1.0", "end")
     prep_text.insert("1.0", out)
     prep_text.config(state="disabled")
+
 def _prep_copy():
     try:
         pyperclip.copy(prep_text.get("1.0", "end-1c"))
@@ -947,6 +768,8 @@ def _prep_enable_edit():
         prep_text.config(state="disabled")
 def show_prep():
     """준비중(템플릿) 화면으로"""
+    # 화면 진입 시 기본 테마로 강제 복귀 (요청 2)
+    _force_basic_theme()
     try:
         input_frame.grid_remove()
         text_canvas.grid_remove()
@@ -956,9 +779,11 @@ def show_prep():
     except Exception:
         pass
     prep_frame.grid(row=0, column=0, columnspan=3, sticky="nsew")
+    _tpl_reload()
     _prep_build_list()
     prep_search.focus_set()
-
+    # 숨김(토글) 버튼 재배치/상위 고정
+    _place_toggle_button()
 # 이벤트 바인딩(검색/선택)
 prep_search.bind("<KeyRelease>", lambda e: _prep_build_list())
 prep_list.bind("<<ListboxSelect>>",
@@ -996,148 +821,141 @@ def 저장():
 # 좌하단에 배치하지만 배경색과 동일하게 해서 숨긴 것처럼 보이게
 def 토글테마():
     """
-    테마 전환 + 배경/오버레이 + 숨김버튼(좌하단) 고정/최상단 유지.
-    - 숨김버튼은 창 크기 변경에도 항상 좌하단(sw) 모서리에 붙도록 place(relx/rely) 사용
-    - 클릭 안 되던 이슈 방지: 전환 직후와 매 Configure 이벤트마다 재배치 + lift()
-    - 입력 패널(왼쪽 Frame) 위에만 반투명 오버레이를 얹고, 그 위젯들은 항상 최상단으로 유지
+    테마 전환 + (씹덕모드일 때만) 배경/오버레이. 색상 적용은 styles.py로 통일.
     """
     global img_label, overlay_labels, hidden_button
-    # --- 숨김버튼을 좌하단에 고정하는 헬퍼 ---
-    def _place_hidden_button():
-        try:
-            root.update_idletasks()
-            bg = root.cget("bg")
-            hidden_button.configure(
-                text=" ", width=3, height=1,  # 클릭영역 넉넉히
-                bg=bg, fg=bg,
-                activebackground=bg, activeforeground=bg,
-                relief="flat", bd=0, highlightthickness=0,
-                takefocus=0, cursor="arrow",
-            )
-            # 창 좌하단 고정 (모서리 기준 sw)
-            hidden_button.place(in_=root, relx=0, rely=1, x=8, y=-8, anchor="sw")
-            hidden_button.lift()  # 항상 최상단
-        except Exception:
-            pass
-    # 창 리사이즈 때도 항상 제자리에
-    if not getattr(root, "_hb_place_bound", False):
-        root.bind("<Configure>", lambda e: _place_hidden_button())
-        setattr(root, "_hb_place_bound", True)
-    현재배경 = root.cget("bg")
-    if 현재배경 == 기본테마["배경"]:
-        # ===== 씹덕테마 적용 =====
-        root.configure(bg=씹덕테마["배경"])
-        input_frame.configure(bg=씹덕테마["배경"])
-        text_canvas.configure(bg=씹덕테마["출력창배경"])
-        for lbl in labels_위젯들:
-            lbl.configure(bg=씹덕테마["배경"], fg=씹덕테마["라벨글자"])
-        for entry in entry_widgets:
-            entry.configure(bg=씹덕테마["입력창배경"])
-        # 위젯 실제 좌표/크기 먼저 계산되도록
+
+    # 현재 테마 파악 → 전환할 테마 결정
+    using_otaku = (root.cget("bg") == 씹덕테마["배경"])
+    new_theme   = 기본테마 if using_otaku else 씹덕테마
+
+    # 1) 색/폰트 등 공통 스타일 적용 (개별 라벨/엔트리 루프 불필요)
+    apply_theme_colors(root, new_theme)   # 창 배경 즉시 반영
+    setup_styles(root, new_theme)         # 옵션/ttk 스타일 재설정
+    # 캔버스/입력 프레임 등 소수 Tk 위젯도 배경만 맞춰줌
+    input_frame.configure(bg=new_theme["배경"])
+    text_canvas.configure(bg=new_theme.get("출력창배경", new_theme["배경"]))
+
+    # 2) 배경/오버레이는 씹덕모드에서만 생성, 기본모드로 돌아갈 땐 정리
+    if new_theme is 씹덕테마:
+        # 좌표 계산
         root.update_idletasks()
         try:
-            # 1) 전체 배경
-            base_img = Image.open(os.path.join(BASE_DIR, "hum.jpg")).convert("RGBA")
+            # 전체 배경 원본 준비
+            base_img = Image.open(HUM_PATH).convert("RGBA")
             base_img = base_img.resize((root.winfo_width(), root.winfo_height()))
-            root._bg_base = base_img   # 창 크기에 맞춰 리사이즈된 원본을 전역에 보관
-            bg_img = base_img.copy(); bg_img.putalpha(150)  # 창 전체 뒷배경 투명도
-            bg_tk = ImageTk.PhotoImage(bg_img)
+            root._bg_base = base_img
 
-            # root 최하단에 전체 배경 이미지
-            global img_label
+            # 창 전체 배경(살짝 투명)
+            bg_img = base_img.copy(); bg_img.putalpha(150)
+            bg_tk  = ImageTk.PhotoImage(bg_img)
             img_label = tk.Label(root, image=bg_tk, bg=씹덕테마["배경"], bd=0)
             img_label.image = bg_tk
             img_label.place(x=0, y=0, relwidth=1, relheight=1)
-            img_label.lower()  # 최하단
+            img_label.lower()
 
-            # 2) 왼쪽 입력 패널에만 반투명 오버레이 (부모 = input_frame)
-            fw, fh = input_frame.winfo_width(), input_frame.winfo_height()
-            abs_x = input_frame.winfo_rootx() - root.winfo_rootx()
-            abs_y = input_frame.winfo_rooty() - root.winfo_rooty()
-
-            cropped = base_img.crop((abs_x, abs_y, abs_x + fw, abs_y + fh))
-            cropped.putalpha(120)  # 패널 투명도
+            # 왼쪽 입력패널 크롭 + 반투명 오버레이
+            fw, fh = input_frame.winfo_width(),  input_frame.winfo_height()
+            ax = input_frame.winfo_rootx() - root.winfo_rootx()
+            ay = input_frame.winfo_rooty() - root.winfo_rooty()
+            cropped = base_img.crop((ax, ay, ax + fw, ay + fh))
+            cropped.putalpha(120)
             cropped_tk = ImageTk.PhotoImage(cropped)
-
             panel_bg = tk.Label(input_frame, image=cropped_tk, bd=0, highlightthickness=0)
             panel_bg.image = cropped_tk
             panel_bg.place(x=0, y=0, width=fw, height=fh)
-
-            # 오버레이/배경 Z-순서 정리
-            panel_bg.lower()                # frame의 바닥
+            panel_bg.lower()
+            # 입력 위젯은 항상 오버레이 위
             for child in input_frame.winfo_children():
                 if child is not panel_bg:
-                    child.lift()           # 입력창/버튼 등은 항상 오버레이 위로
+                    child.lift()
 
-            global overlay_labels
             overlay_labels = [panel_bg]
-            # [NEW] 텍스트영역 워터마크 적용 + 리사이즈에도 갱신
+
+            # 출력 캔버스 워터마크 갱신/바인딩
             _update_canvas_bg()
             if not getattr(text_canvas, "_bg_bind", False):
                 text_canvas.bind("<Configure>", lambda e: _update_canvas_bg(), add="+")
                 root.bind("<Configure>",       lambda e: _update_canvas_bg(), add="+")
                 text_canvas._bg_bind = True
+
         except Exception as e:
-            print("이미지 처리 실패:", e)    
-        # 숨김버튼은 항상 최상단/좌하단 고정
-        _place_hidden_button()
+            print("이미지 처리 실패:", e)
+
     else:
-        # ===== 기본테마 복구 =====
-        root.configure(bg=기본테마["배경"])
-        input_frame.configure(bg=기본테마["배경"])
-        text_canvas.configure(bg=기본테마["출력창배경"])
-        for lbl in labels_위젯들:
-            lbl.configure(bg=기본테마["배경"], fg=기본테마["라벨글자"])
-        for entry in entry_widgets:
-            entry.configure(bg=기본테마["입력창배경"])
-        # 만들어둔 라벨 정리
+        # 기본테마 복귀: 배경/오버레이 정리
         try:
-            if img_label.winfo_exists():
+            if img_label and img_label.winfo_exists():
                 img_label.destroy()
         except Exception:
             pass
         try:
             for lbl in overlay_labels:
-                if lbl.winfo_exists():
+                if lbl and lbl.winfo_exists():
                     lbl.destroy()
         except Exception:
             pass
         overlay_labels = []
-        root._text_bg_label = None
-        _update_canvas_bg()  # 전환 직후 폭/배경 즉시 재계산 (일반모드)
-        # 복귀 후에도 숨김 버튼은 항상 위/좌하단 고정
-        _place_hidden_button()
-# --- 숨김(토글) 버튼을 생성/배치: 프로그램 초기화가 끝난 뒤 한 번 호출하세요 ---
-# 예) 모든 위젯 배치가 끝난 뒤: init_hidden_toggle_button(root)
-def init_hidden_toggle_button(root):
+        root._bg_base = None
+        _update_canvas_bg()  # 일반 모드에선 배경 제거됨
+
+    # 3) 숨김(토글) 버튼은 공용 헬퍼로 좌하단 고정 + 최상단
+    _place_toggle_button()
+
+def _place_toggle_button():
+    """숨김(토글) 버튼을 좌하단에 다시 배치하고 항상 최상단으로 유지"""
     global hidden_button
     try:
-        hidden_button.destroy()
-    except Exception:
-        pass
-    hidden_button = tk.Button(
-        root,
-        command=토글테마,
-        text=" ",  # 내용은 숨김
-        relief="flat", bd=0, highlightthickness=0,
-        takefocus=0, cursor="arrow",
-    )
-    def _place(_=None):
+        if not hidden_button:
+            return
+        root.update_idletasks()
         bg = root.cget("bg")
-        hidden_button.configure(bg=bg, activebackground=bg, fg=bg, activeforeground=bg, width=3, height=1)
+        hidden_button.configure(bg=bg, fg=bg, activebackground=bg, activeforeground=bg)
         hidden_button.place(in_=root, relx=0, rely=1, x=8, y=-8, anchor="sw")
         hidden_button.lift()
-    # 처음에도, 리사이즈 때도 항상 좌하단/최상단 유지
-    root.bind("<Configure>", _place, add="+")
-    root.after(0, _place)
-    # 키보드 단축키도 함께: Ctrl+Shift+T
-    root.bind("<Control-Shift-t>", lambda e: 토글테마(), add="+")
-# … 위젯들(grid/place) 다 끝난 다음
-root.update_idletasks()             # 크기/좌표 계산
-init_hidden_toggle_button(root)     # ⬅️ 이 줄 추가 (숨김 버튼 + 단축키 등록)
-# [NEW] 앱 시작하면 처음 화면부터
-show_home()
+    except Exception:
+        pass
 
-root.bind("<Control-e>", lambda e: (_open_editor(), "break"), add="+")
+def _force_basic_theme():
+    """현재가 씹덕테마면 기본테마로 강제 복귀 (화면 이동 시 사용)"""
+    if root.cget("bg") == 씹덕테마["배경"]:
+        # 토글을 한 번 더 호출하여 기본테마 분기로 이동
+        토글테마()
+
+# --- 숨김(토글) 버튼을 생성/배치: 프로그램 초기화가 끝난 뒤 한 번 호출하세요 ---
+# 예) 모든 위젯 배치가 끝난 뒤: init_hidden_toggle_button(root)
+
+def init_hidden_toggle_button():
+    """좌하단에 '숨김' 토글 버튼(실제로는 투명)을 만들고 항상 고정."""
+    global hidden_button
+
+    # 기존 버튼 있으면 제거
+    try:
+        if hidden_button and hidden_button.winfo_exists():
+            hidden_button.destroy()
+    except Exception:
+        pass
+
+    # 버튼 생성 (완전 투명/플랫)
+    hidden_button = tk.Button(
+        root, text=" ", command=토글테마,
+        relief="flat", bd=0, highlightthickness=0, cursor="arrow",
+        takefocus=0
+    )
+
+    def _place(_=None):
+        # 배경색과 동일하게 칠해서 '투명'하게 보이도록
+        bg = root.cget("bg")
+        hidden_button.configure(bg=bg, fg=bg, activebackground=bg, activeforeground=bg)
+        # 창 좌하단에 고정
+        hidden_button.place(in_=root, relx=0, rely=1, x=8, y=-8, anchor="sw")
+        hidden_button.lift()
+
+    _place()
+    # 리사이즈/이동마다 다시 고정
+    root.bind("<Configure>", _place, add="+")
+
+# 초기 토글 버튼 생성 (모든 위젯 생성 후)
+root.after(0, init_hidden_toggle_button)
 
 root.mainloop()
