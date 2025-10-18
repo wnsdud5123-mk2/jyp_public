@@ -1,4 +1,4 @@
-<img width="1752" height="906" alt="image" src="https://github.com/user-attachments/assets/e77e6e9d-eff0-4fe9-8f53-acd126f4ed52" /># JYP mk2
+# JYP mk2
 
 ~~~md
 공개 미러 안내
