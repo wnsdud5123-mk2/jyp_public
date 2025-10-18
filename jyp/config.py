@@ -1,5 +1,7 @@
 # jyp/config.py
 import os, sys
+from dotenv import load_dotenv
+load_dotenv()  # .env 읽기
 # 템플릿 공유파일 경로 (환경변수 우선)
 TEMPLATE_PATH = os.environ.get(
     "JYP_TEMPLATE_PATH",
@@ -36,11 +38,12 @@ PLACEHOLDER = "여기에 이름입력"
     "입력창배경": "#fff7fc",
     "출력창배경": "#fff0f5"
 }
+def _need(k: str) -> str:
+    v = os.environ.get(k, "")
+    if not v:
+        raise RuntimeError(f"Missing environment variable: {k}")
+    return v
 # --- JYP + GAS 연동 ---
-API_URL = os.environ.get("JYP_API_URL") or "https://script.google.com/macros/s/AKfycbzeksDSNknEUR-PuXwjdrFlbRQMBm4PRITYKI1kf2RzGFSp_YGxZgMZgwiiTich4cqA/exec"
-API_SECRET = os.environ.get("JYP_API_SECRET") or "SECRET"
-API_TIMEOUT = 8  # 초
-
-# --- GAS 연결 설정 ---
-GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzeksDSNknEUR-PuXwjdrFlbRQMBm4PRITYKI1kf2RzGFSp_YGxZgMZgwiiTich4cqA/exec"  # 네 배포 URL
-GAS_SECRET = "wnsduddlsmstlqejrdlek~!!"  # 지금은 비워둬도 동작. 나중에 Script Properties에 같은 값 넣고 서명검증 켜면 됨
+API_URL     = os.environ.get("JYP_API_URL")  # (원하면 이것도 _need 로 강제)
+API_SECRET  = _need("JYP_GAS_SECRET")        # ← 비밀은 반드시 존재해야 함
+API_TIMEOUT = 8
