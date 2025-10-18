@@ -1,4 +1,11 @@
-# JYP mk2
+<img width="1752" height="906" alt="image" src="https://github.com/user-attachments/assets/e77e6e9d-eff0-4fe9-8f53-acd126f4ed52" /># JYP mk2
+
+~~~md
+공개 미러 안내
+이 리포는 내부 프로젝트의 공개용 미러입니다.
+실데이터(특가/밴리스트), 키/토큰, .env 등은 포함되어 있지 않습니다.
+동작 예시는 gas_sample/와 문서로 제공합니다.
+~~~
 
 장수레저 예약 문자/특가 관리 자동화 툴  
 **Python + Tkinter GUI** / 모듈형 구조
